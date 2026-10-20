@@ -122,7 +122,7 @@ def lire_medicam(fichier):
         produit.columns = COLONNES_PRODUIT
         cip = pd.to_numeric(produit["cip13"], errors="coerce")
         garder = cip.notna()
-        produit = produit[garder].fillna("").astype(str)
+        produit = produit[garder].astype("string").fillna("").astype(str)
         produit["cip13"] = cip[garder].astype("int64").astype(str)
 
         colonnes_par_mois = {}
