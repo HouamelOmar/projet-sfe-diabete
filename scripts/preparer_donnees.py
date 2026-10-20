@@ -28,6 +28,7 @@ RACINE = Path(__file__).resolve().parent.parent
 BRUT = RACINE / "data" / "brut"
 A_IMPORTER = RACINE / "data" / "a_importer"
 ARCHIVE = RACINE / "data" / "donnees_sfe_diabete.zip"
+ARCHIVE_MEDICAM = RACINE / "sources" / "medicam"   # copie des fichiers officiels Medic'AM
 
 ANNEES = [2021, 2022, 2023, 2024, 2025]
 
@@ -101,19 +102,29 @@ def medicam():
             fichier = BRUT / "medicam" / f"{annee}-{periode}.zip"
             if fichier.exists():
                 continue
-            # le lien data.gouv.fr du 2e semestre 2025 est erroné : on construit l'adresse
-            for suffixe in ["", "_0"]:
-                try:
-                    telecharger("https://www.assurance-maladie.ameli.fr/sites/default/files/"
-                                f"{annee}-{periode}_medic-am-par-type-de-prescripteur_serie-mensuelle"
-                                f"{suffixe}.zip", fichier)
-                    break
-                except urllib.error.HTTPError as erreur:
-                    fichier.unlink(missing_ok=True)
-                    if erreur.code != 404:               # seul un 404 justifie d'essayer l'autre adresse
-                        raise
-            else:
-                raise RuntimeError(f"Medic'AM {annee} {periode} introuvable")
+            try:
+                # le lien data.gouv.fr du 2e semestre 2025 est erroné : on construit l'adresse
+                for suffixe in ["", "_0"]:
+                    try:
+                        telecharger("https://www.assurance-maladie.ameli.fr/sites/default/files/"
+                                    f"{annee}-{periode}_medic-am-par-type-de-prescripteur_serie-mensuelle"
+                                    f"{suffixe}.zip", fichier)
+                        break
+                    except urllib.error.HTTPError as erreur:
+                        fichier.unlink(missing_ok=True)
+                        if erreur.code != 404:           # seul un 404 justifie d'essayer l'autre adresse
+                            raise
+                else:
+                    raise RuntimeError(f"Medic'AM {annee} {periode} introuvable")
+            except urllib.error.HTTPError as erreur:
+                # ameli.fr refuse les serveurs hors de France (ex. GitHub Actions) : on utilise
+                # la copie des fichiers officiels archivée dans le dépôt (sources/medicam/)
+                copie = ARCHIVE_MEDICAM / fichier.name
+                if erreur.code != 403 or not copie.exists():
+                    raise
+                fichier.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(copie, fichier)
+                print(f"  {fichier.name} : accès ameli.fr refusé (403), copie archivée utilisée")
 
 
 def bdpm():
