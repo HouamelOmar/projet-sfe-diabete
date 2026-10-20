@@ -33,6 +33,9 @@ ANNEES = [2021, 2022, 2023, 2024, 2025]
 
 CATALOGUE, SCHEMA, VOLUME = "workspace", "sfe_diabete", "brut"
 
+# ameli.fr refuse (erreur 403) les requêtes sans identification de navigateur
+USER_AGENT = "Mozilla/5.0 (compatible; projet-sfe-diabete; +https://github.com/HouamelOmar/projet-sfe-diabete)"
+
 LABOS_TRANSPARENCE = [
     "NOVO NORDISK",
     "SANOFI WINTHROP INDUSTRIE", "SANOFI AVENTIS FRANCE",
@@ -65,7 +68,10 @@ def telecharger(url, destination, params=None):
     destination.parent.mkdir(parents=True, exist_ok=True)
     for tentative in range(10):
         deja = destination.stat().st_size if destination.exists() else 0
-        requete = urllib.request.Request(url, headers={"Range": f"bytes={deja}-"} if deja else {})
+        entetes = {"User-Agent": USER_AGENT}
+        if deja:
+            entetes["Range"] = f"bytes={deja}-"
+        requete = urllib.request.Request(url, headers=entetes)
         try:
             with urllib.request.urlopen(requete, timeout=120) as reponse:
                 if deja and reponse.status != 206:   # le serveur ne gère pas la reprise
@@ -78,7 +84,8 @@ def telecharger(url, destination, params=None):
             if erreur.code == 416:                   # fichier déjà complet
                 print(f"  {destination.name} : déjà complet")
                 return
-            if erreur.code == 404:
+            if erreur.code in (403, 404):            # refus ou fichier absent : inutile de réessayer
+                print(f"  {url} -> erreur {erreur.code}")
                 raise
             print(f"  erreur {erreur}, nouvelle tentative...")
         except Exception as erreur:
@@ -101,8 +108,10 @@ def medicam():
                                 f"{annee}-{periode}_medic-am-par-type-de-prescripteur_serie-mensuelle"
                                 f"{suffixe}.zip", fichier)
                     break
-                except urllib.error.HTTPError:
+                except urllib.error.HTTPError as erreur:
                     fichier.unlink(missing_ok=True)
+                    if erreur.code != 404:               # seul un 404 justifie d'essayer l'autre adresse
+                        raise
             else:
                 raise RuntimeError(f"Medic'AM {annee} {periode} introuvable")
 
@@ -135,9 +144,10 @@ def transparence():
 def rpps():
     print("Annuaire Santé RPPS")
     fichier = BRUT / "rpps" / "personne_activite.txt"
-    with urllib.request.urlopen(
+    with urllib.request.urlopen(urllib.request.Request(
             "https://www.data.gouv.fr/api/1/datasets/annuaire-sante-extractions-des-donnees-en-libre-acces-"
-            "des-professionnels-intervenant-dans-le-systeme-de-sante-rpps/", timeout=60) as r:
+            "des-professionnels-intervenant-dans-le-systeme-de-sante-rpps/",
+            headers={"User-Agent": USER_AGENT}), timeout=60) as r:
         ressource = next(x for x in json.load(r)["resources"] if "personne-activite" in x["title"])
     if not fichier.exists() or fichier.stat().st_size < (ressource.get("filesize") or float("inf")):
         telecharger(ressource["url"], fichier)
