@@ -1,0 +1,35 @@
+# Ingestion automatique des données publiques vers Databricks.
+# Databricks Free Edition bloque l'accès à Internet depuis les notebooks : le téléchargement
+# est donc fait ici, dans le cloud GitHub, puis les fichiers sont déposés dans le Volume
+# Databricks via l'API Files.
+#
+# Secrets à définir dans GitHub (Settings > Secrets and variables > Actions) :
+#   DATABRICKS_HOST  : adresse de l'espace Databricks, ex. https://dbc-xxxx.cloud.databricks.com
+#   DATABRICKS_TOKEN : jeton d'accès personnel Databricks
+
+name: Ingestion des données vers Databricks
+
+on:
+  workflow_dispatch:          # lancement manuel (onglet Actions > Run workflow)
+  schedule:
+    - cron: "0 6 5 * *"       # le 5 de chaque mois à 6 h UTC
+
+jobs:
+  ingestion:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Récupérer le code
+        uses: actions/checkout@v4
+
+      - name: Installer Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Télécharger, préparer et envoyer les données vers Databricks
+        env:
+          DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
+          DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
+          PYTHONUNBUFFERED: "1"
+        run: python scripts/preparer_donnees.py
