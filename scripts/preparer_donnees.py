@@ -277,7 +277,7 @@ if __name__ == "__main__":
     preparer_import()
     if os.environ.get("DATABRICKS_HOST") and os.environ.get("DATABRICKS_TOKEN"):
         envoyer_vers_databricks()
-        print("\nTerminé. Les fichiers sont dans le Volume : lancer le notebook 02_bronze_tables.")
+        print("\nTerminé. Les fichiers sont dans le Volume (traitement : scripts/job_databricks.py).")
     else:
         creer_archive()
         print(f"\nTerminé. Importer {ARCHIVE.name} à la racine du Volume workspace > sfe_diabete > brut")

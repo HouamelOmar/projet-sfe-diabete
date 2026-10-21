@@ -1,7 +1,9 @@
-# Ingestion automatique des données publiques vers Databricks.
-# Databricks Free Edition bloque l'accès à Internet depuis les notebooks : le téléchargement
-# est donc fait ici, dans le cloud GitHub, puis les fichiers sont déposés dans le Volume
-# Databricks via l'API Files.
+# Pipeline complet du projet :
+#   1. ingestion des données publiques vers Databricks. Databricks Free Edition bloque l'accès à
+#      Internet depuis les notebooks : le téléchargement est donc fait ici, dans le cloud GitHub,
+#      puis les fichiers sont déposés dans le Volume Databricks via l'API Files ;
+#   2. mise à jour du dossier Git Databricks, puis lancement du job « SFE diabète - pipeline »
+#      (notebooks 02 -> 03 -> 04 -> 05 et 06).
 #
 # Secrets à définir dans GitHub (Settings > Secrets and variables > Actions) :
 #   DATABRICKS_HOST  : adresse de l'espace Databricks, ex. https://dbc-xxxx.cloud.databricks.com
@@ -11,6 +13,11 @@ name: Ingestion des données vers Databricks
 
 on:
   workflow_dispatch:          # lancement manuel (onglet Actions > Run workflow)
+    inputs:
+      ingestion:
+        description: "Télécharger à nouveau les données (décocher pour relancer seulement les notebooks)"
+        type: boolean
+        default: true
   schedule:
     - cron: "0 6 5 * *"       # le 5 de chaque mois à 6 h UTC
 
@@ -28,8 +35,16 @@ jobs:
           python-version: "3.11"
 
       - name: Télécharger, préparer et envoyer les données vers Databricks
+        if: github.event_name == 'schedule' || inputs.ingestion
         env:
           DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
           DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
           PYTHONUNBUFFERED: "1"
         run: python scripts/preparer_donnees.py
+
+      - name: Mettre à jour le code dans Databricks et lancer le job de traitement
+        env:
+          DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
+          DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
+          PYTHONUNBUFFERED: "1"
+        run: python scripts/job_databricks.py
