@@ -52,11 +52,17 @@ def toutes_les_pages(chemin, cle, parametres=None):
             return elements
 
 
-def mettre_a_jour_dossier_git():
+def mettre_a_jour_dossier_git(email):
     """Trouve le dossier Git Databricks relié au dépôt GitHub et le place sur la dernière version de main."""
     normaliser = lambda url: url.lower().removeprefix("https://").removesuffix(".git").rstrip("/")
-    dossiers = [d for d in toutes_les_pages("/api/2.0/repos", "repos") if normaliser(d.get("url", "")) == DEPOT]
+    # Sans path_prefix, l'API ne renvoie que les dossiers Git de /Workspace/Repos (ancien emplacement) :
+    # on cherche aussi dans le dossier personnel, où Databricks les crée aujourd'hui
+    trouves = []
+    for prefixe in [f"/Workspace/Users/{email}", None]:
+        trouves += toutes_les_pages("/api/2.0/repos", "repos", {"path_prefix": prefixe} if prefixe else None)
+    dossiers = [d for d in trouves if normaliser(d.get("url", "")) == DEPOT]
     if not dossiers:
+        print("Dossiers Git trouvés :", [(d.get("path"), d.get("url")) for d in trouves] or "aucun")
         raise RuntimeError(
             "Aucun dossier Git Databricks relié au dépôt. Dans Databricks : Workspace > Create > Git folder, "
             f"adresse https://{DEPOT}, puis relancer.")
@@ -99,8 +105,8 @@ def creer_ou_mettre_a_jour_job(definition):
 
 
 if __name__ == "__main__":
-    dossier = mettre_a_jour_dossier_git()
     email = api("GET", "/api/2.0/preview/scim/v2/Me")["userName"]
+    dossier = mettre_a_jour_dossier_git(email)
     job_id = creer_ou_mettre_a_jour_job(definition_job(dossier, email))
     run_id = api("POST", "/api/2.1/jobs/run-now", {"job_id": job_id})["run_id"]
     lien = f"{os.environ['DATABRICKS_HOST'].rstrip('/')}/jobs/{job_id}/runs/{run_id}"
