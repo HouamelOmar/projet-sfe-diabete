@@ -2,7 +2,7 @@
 #   1. ingestion des données publiques vers Databricks. Databricks Free Edition bloque l'accès à
 #      Internet depuis les notebooks : le téléchargement est donc fait ici, dans le cloud GitHub,
 #      puis les fichiers sont déposés dans le Volume Databricks via l'API Files ;
-#   2. mise à jour du dossier Git Databricks, puis lancement du job « SFE diabète - pipeline »
+#   2. copie des notebooks dans Databricks (Users/<email>/sfe_diabete_pipeline), puis lancement du job « SFE diabète - pipeline »
 #      (notebooks 02 -> 03 -> 04 -> 05 et 06).
 #
 # Secrets à définir dans GitHub (Settings > Secrets and variables > Actions) :
@@ -42,7 +42,7 @@ jobs:
           PYTHONUNBUFFERED: "1"
         run: python scripts/preparer_donnees.py
 
-      - name: Mettre à jour le code dans Databricks et lancer le job de traitement
+      - name: Déployer les notebooks dans Databricks et lancer le job de traitement
         env:
           DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
           DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}

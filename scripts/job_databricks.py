@@ -2,20 +2,24 @@
 Orchestration Databricks : mise à jour du code puis lancement du job de traitement.
 
 Appelé par GitHub Actions après l'ingestion (scripts/preparer_donnees.py) :
-  1. met à jour le dossier Git Databricks du projet sur la dernière version de main (équivalent du « Pull ») ;
+  1. copie les notebooks du dépôt dans le dossier Databricks Users/<email>/sfe_diabete_pipeline
+     (toujours la dernière version de GitHub, sans « Pull » manuel ni dossier Git à configurer) ;
   2. crée ou met à jour le job « SFE diabète - pipeline » (02 -> 03 -> 04 -> 05 et 06) ;
   3. lance le job et affiche le lien vers son exécution.
 
 Les tâches tournent sur le calcul serverless (aucun cluster à gérer, seul mode disponible sur Free Edition).
 Variables d'environnement : DATABRICKS_HOST et DATABRICKS_TOKEN (secrets GitHub).
 """
+import base64
 import json
 import os
 import urllib.error
 import urllib.parse
 import urllib.request
+from pathlib import Path
 
-DEPOT = "github.com/houamelomar/projet-sfe-diabete"
+NOTEBOOKS = Path(__file__).resolve().parent.parent / "notebooks"
+DOSSIER_PIPELINE = "sfe_diabete_pipeline"   # dossier Databricks géré par ce script (écrasé à chaque lancement)
 NOM_JOB = "SFE diabète - pipeline"
 
 # (tâche, notebook, tâches dont elle dépend)
@@ -52,24 +56,17 @@ def toutes_les_pages(chemin, cle, parametres=None):
             return elements
 
 
-def mettre_a_jour_dossier_git(email):
-    """Trouve le dossier Git Databricks relié au dépôt GitHub et le place sur la dernière version de main."""
-    normaliser = lambda url: url.lower().removeprefix("https://").removesuffix(".git").rstrip("/")
-    # Sans path_prefix, l'API ne renvoie que les dossiers Git de /Workspace/Repos (ancien emplacement) :
-    # on cherche aussi dans le dossier personnel, où Databricks les crée aujourd'hui
-    trouves = []
-    for prefixe in [f"/Workspace/Users/{email}", None]:
-        trouves += toutes_les_pages("/api/2.0/repos", "repos", {"path_prefix": prefixe} if prefixe else None)
-    dossiers = [d for d in trouves if normaliser(d.get("url", "")) == DEPOT]
-    if not dossiers:
-        print("Dossiers Git trouvés :", [(d.get("path"), d.get("url")) for d in trouves] or "aucun")
-        raise RuntimeError(
-            "Aucun dossier Git Databricks relié au dépôt. Dans Databricks : Workspace > Create > Git folder, "
-            f"adresse https://{DEPOT}, puis relancer.")
-    dossier = dossiers[0]
-    api("PATCH", f"/api/2.0/repos/{dossier['id']}", {"branch": "main"})
-    print(f"Dossier Git mis à jour : {dossier['path']} (branche main)")
-    return dossier["path"]
+def deployer_notebooks(email):
+    """Copie les notebooks du dépôt (version GitHub en cours) dans un dossier dédié de l'espace Databricks."""
+    dossier = f"/Workspace/Users/{email}/{DOSSIER_PIPELINE}"
+    api("POST", "/api/2.0/workspace/mkdirs", {"path": f"{dossier}/notebooks"})
+    for fichier in sorted(NOTEBOOKS.glob("*.py")):
+        api("POST", "/api/2.0/workspace/import", {
+            "path": f"{dossier}/notebooks/{fichier.stem}", "format": "SOURCE", "language": "PYTHON",
+            "overwrite": True, "content": base64.b64encode(fichier.read_bytes()).decode()})
+        print(f"  notebook déployé : {fichier.stem}")
+    print(f"Notebooks déployés dans {dossier}/notebooks")
+    return dossier
 
 
 def definition_job(dossier, email):
@@ -106,7 +103,7 @@ def creer_ou_mettre_a_jour_job(definition):
 
 if __name__ == "__main__":
     email = api("GET", "/api/2.0/preview/scim/v2/Me")["userName"]
-    dossier = mettre_a_jour_dossier_git(email)
+    dossier = deployer_notebooks(email)
     job_id = creer_ou_mettre_a_jour_job(definition_job(dossier, email))
     run_id = api("POST", "/api/2.1/jobs/run-now", {"job_id": job_id})["run_id"]
     lien = f"{os.environ['DATABRICKS_HOST'].rstrip('/')}/jobs/{job_id}/runs/{run_id}"
