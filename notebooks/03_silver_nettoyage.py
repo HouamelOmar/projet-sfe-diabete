@@ -5,8 +5,8 @@
 # MAGIC | Table créée | Contenu | Grain |
 # MAGIC |---|---|---|
 # MAGIC | `silver_ventes_diabete` | Ventes des antidiabétiques (ATC A10) avec laboratoire, classe thérapeutique, marque / générique | médicament × mois × type de prescripteur |
-# MAGIC | `silver_medecins` | Un médecin = une ligne, avec sa spécialité regroupée et son mode d'exercice | médecin (RPPS) |
-# MAGIC | `silver_declarations` | Déclarations Transparence Santé typées (catégorie d'action, montant réellement versé, spécialité et région du médecin) | déclaration |
+# MAGIC | `silver_medecins` | Un médecin = une ligne, avec sa spécialité regroupée, son mode d'exercice et s'il est en activité | médecin (RPPS) |
+# MAGIC | `silver_declarations` | Déclarations Transparence Santé typées (catégorie d'action, montant réellement versé, thème de l'événement, spécialité et région du médecin) | déclaration |
 # MAGIC
 # MAGIC **Règles méthodologiques importantes** (détaillées dans chaque section) :
 # MAGIC 1. Ventes = *base de remboursement* Medic'AM (≈ chiffre d'affaires au prix public), pharmacies de ville uniquement.
@@ -206,12 +206,18 @@ display(spark.sql("""
 # MAGIC
 # MAGIC Un médecin peut avoir plusieurs activités (lignes). On garde **une seule spécialité** par médecin,
 # MAGIC par ordre de priorité pour l'étude : endocrinologie > cardiologie > néphrologie > médecine générale > autres.
+# MAGIC
+# MAGIC Le RPPS contient aussi des médecins **sans aucune activité déclarée** (retraités pour la plupart :
+# MAGIC 513 des 2 913 endocrinologues). Ils sont gardés pour identifier les bénéficiaires des déclarations,
+# MAGIC mais la colonne `en_activite` permet de les exclure des dénominateurs (taux de couverture).
 
 # COMMAND ----------
 
 libelle = sans_accents(F.col("libelle_savoir_faire"))
 specialite = (F.when(libelle.contains("endocrinologie"), "Endocrinologie-diabétologie")
-               .when(libelle.contains("cardiologie"), "Cardiologie")
+               # « Médecine cardiovasculaire » : intitulé des cardiologues formés depuis la réforme de l'internat
+               .when(libelle.contains("cardiologie")
+                     | (libelle.contains("cardiovasculaire") & ~libelle.contains("chirurgie")), "Cardiologie")
                .when(libelle.contains("nephrologie"), "Néphrologie")
                .when(libelle.contains("medecine generale"), "Médecine générale")
                .when(F.col("libelle_savoir_faire").isNotNull(), "Autres spécialités")
@@ -235,6 +241,8 @@ modes = (activites.groupBy("rpps")
                       .when(F.array_contains("modes", "L"), "Libéral")
                       .when(F.array_contains("modes", "S"), "Salarié")
                       .otherwise("Non renseigné"))
+         # au moins une activité avec un mode d'exercice (libéral, salarié, bénévole)
+         .withColumn("en_activite", F.size("modes") > 0)
          .drop("modes"))
 
 medecins = (activites
@@ -247,7 +255,10 @@ enregistrer(medecins, "silver_medecins")
 
 nb_doublons = spark.sql("SELECT count(*) - count(DISTINCT rpps) AS n FROM silver_medecins").first().n
 assert nb_doublons == 0, "Un médecin doit apparaître une seule fois"
-display(spark.sql("SELECT specialite, count(*) AS nb_medecins FROM silver_medecins GROUP BY 1 ORDER BY 2 DESC"))
+display(spark.sql("""
+    SELECT specialite, count(*) AS nb_medecins, count_if(en_activite) AS nb_en_activite
+    FROM silver_medecins GROUP BY 1 ORDER BY 2 DESC
+"""))
 
 # COMMAND ----------
 
@@ -265,8 +276,24 @@ display(spark.sql("SELECT specialite, count(*) AS nb_medecins FROM silver_medeci
 # MAGIC | Formation | formation |
 # MAGIC | Recherche | contrats et bourses de recherche |
 # MAGIC
-# MAGIC **Ciblage diabète** : une déclaration est considérée comme liée au diabète si le médecin est
-# MAGIC endocrinologue-diabétologue **ou** si l'événement mentionne le diabète (« diab », congrès SFD, EASD).
+# MAGIC **Thème de l'événement** : seules les **conventions** décrivent l'événement (`information_evenement`).
+# MAGIC Les avantages et rémunérations (les montants additionnés) n'ont pas cette information, mais ils citent
+# MAGIC leur convention dans `convention_liee` (= `identifiant_unique` de la convention) : on récupère ainsi
+# MAGIC l'événement de la convention. Le texte est ensuite classé par mots-clés :
+# MAGIC
+# MAGIC | Thème | Exemples de mots-clés |
+# MAGIC |---|---|
+# MAGIC | Diabète | diabète, DT2, insuline, GLP-1, SGLT2, glycémie, SFD, EASD, noms de produits (Ozempic, Trulicity, Forxiga…) |
+# MAGIC | Obésité | obésité, surpoids, Wegovy, Saxenda |
+# MAGIC | Autre aire thérapeutique | tout autre texte précis (psoriasis, hémophilie, oncologie…) |
+# MAGIC | Non précisé | pas d'événement, ou libellé générique (« Contrat de participation à une manifestation », « France »…) |
+# MAGIC
+# MAGIC **Ciblage diabète** : une déclaration est liée au diabète si son événement est classé « Diabète »,
+# MAGIC **ou** si l'événement n'est pas précisé et que le médecin est endocrinologue-diabétologue.
+# MAGIC Un endocrinologue invité à un événement sur la thyroïde n'est donc plus compté dans le diabète.
+# MAGIC
+# MAGIC ⚠️ Limite : la plupart des avantages (repas surtout) d'AstraZeneca, Boehringer Ingelheim et MSD ne citent
+# MAGIC pas de convention. Pour ces laboratoires, le ciblage repose davantage sur la spécialité du médecin.
 # MAGIC Transparence Santé ne précise pas le produit promu : c'est une **estimation**, assumée comme telle.
 
 # COMMAND ----------
@@ -321,11 +348,46 @@ departement = (F.when(code_postal.startswith("97"), code_postal.substr(1, 3))
                       F.when(code_postal < "20200", "2A").otherwise("2B"))
                 .otherwise(code_postal.substr(1, 2)))
 
-texte_evenement = F.concat_ws(" ", "information_evenement", "autre_motif")
+# Événement de chaque convention, retrouvé par les avantages et rémunérations via convention_liee.
+# Jointure par groupe (et non par entreprise) : Lilly France SAS est devenue Lilly France en 2023.
+conventions = (spark.table("bronze_transparence")
+               .filter(F.col("lien_interet") == "convention")
+               .join(groupes_transparence, "raison_sociale")
+               .select("groupe_laboratoire", F.col("identifiant_unique").alias("convention_liee"),
+                       F.concat_ws(" ", "information_evenement", "autre_motif").alias("evenement_convention"))
+               .dropDuplicates(["groupe_laboratoire", "convention_liee"]))
+
+texte_evenement = F.concat_ws(" ", "information_evenement", "autre_motif", "evenement_convention")
+
+# Mots-clés recherchés dans le texte de l'événement (minuscules, sans accents), testés dans cet ordre
+MOTS_DIABETE = (r"diab|\bdt ?[12]\b|insulin|glycem|\bsfd\b|easd|glp|sglt|glifloz|gliptin|"
+                r"ozempic|trulicity|mounjaro|tirzepatid|semaglutid|dulaglutid|liraglutid|victoza|xultophy|"
+                r"tresiba|fiasp|novorapid|novomix|toujeo|lantus|soliqua|apidra|abasaglar|humalog|lyumjev|"
+                r"forxiga|xigduo|jardiance|synjardy|januvia|janumet|trajenta|stagid|glucophage|diamicron")
+MOTS_OBESITE = r"obesit|surpoids|wegovy|saxenda"
+MOTS_METABOLISME = r"metaboli|endocrino"     # après l'obésité : « obésité, maladie cardiométabolique »
+MOTS_CARDIO_RENAL = (r"cardi|\bsfc\b|jesfc|\bcncf\b|\besc\b|\bjfn\b|sfndt|renal|\bmrc\b|\bcrm\b|nephro|"
+                     r"insuffisance (cardiaque|renale)|hypertension arterielle|\bhta\b|lipid|cholesterol")
+MOTS_AUTRES_AIRES = (r"oncolog|cancer|tumeu|hemato|lymphom|myelom|leucem|psoria|dermato|rhumat|spondyl|arthrit|"
+                     r"asthm|bpco|pneumo|respir|hemophil|haemophil|htap|hypertension pulmonaire|vaccin|infect|"
+                     r"\bvih\b|hepatit|migraine|neuro|sclerose|alzheimer|parkinson|psychi|depress|schizo|"
+                     r"ophtalm|retin|osteopor|orthop|anesthes|reanimation|immuno|crohn|rectocolite|mici|"
+                     r"gastro|urolog|prostat|gyneco|fertilit|douleur|thyroid|croissance|\borl\b|allerg|"
+                     r"pediatr|\bio\b|\bsfr\b|eadv|\bjdp\b|\bjird\b|asco|\bash\b|\bats\b|\bsein\b|chirurg|esmo|\bsfh\b|sfar|"
+                     r"pseudomonas|blse|antibio|covid|transplant|greffe|maladies? rares?")
+
+texte = sans_accents(texte_evenement)
+theme_evenement = (F.when(texte.rlike(MOTS_DIABETE), "Diabète")
+                    .when(texte.rlike(MOTS_OBESITE), "Obésité")
+                    .when(texte.rlike(MOTS_METABOLISME), "Diabète")
+                    .when(texte.rlike(MOTS_CARDIO_RENAL), "Cardio-rénal")
+                    .when(texte.rlike(MOTS_AUTRES_AIRES), "Autre aire thérapeutique")
+                    .otherwise("Non précisé"))
 
 declarations = (spark.table("bronze_transparence")
     .dropDuplicates(["id"])
     .join(groupes_transparence, "raison_sociale")
+    .join(conventions, ["groupe_laboratoire", "convention_liee"], "left")
     .withColumn("date", F.to_date(F.substring("date", 1, 10)))
     .withColumn("montant", F.col("montant").cast("double"))
     .withColumn("rpps", rpps)
@@ -351,11 +413,14 @@ declarations = (spark.table("bronze_transparence")
         F.coalesce("mode_exercice", F.lit("Non identifié")).alias("mode_exercice"),
         "departement",
         F.coalesce("region", F.lit("Hors France / inconnue")).alias("region"),
-        texte_evenement.rlike(r"(?i)diab|\bSFD\b|EASD").alias("evenement_diabete"),
-        "information_evenement",
+        F.col("evenement_convention").isNotNull().alias("convention_retrouvee"),
+        theme_evenement.alias("theme_evenement"),
+        F.when(texte_evenement != "", texte_evenement).alias("evenement"),
     )
     .withColumn("cible_diabete",
-                (F.col("specialite") == "Endocrinologie-diabétologie") | F.col("evenement_diabete")))
+                (F.col("theme_evenement") == "Diabète")
+                | ((F.col("theme_evenement") == "Non précisé")
+                   & (F.col("specialite") == "Endocrinologie-diabétologie"))))
 enregistrer(declarations, "silver_declarations")
 
 # COMMAND ----------
@@ -376,6 +441,25 @@ display(spark.sql("""
       sum(CASE WHEN montant_declare < 0 THEN 1 ELSE 0 END)                   AS nb_montants_negatifs
     FROM silver_declarations
 """))
+
+# COMMAND ----------
+
+# Rattachement des paiements à leur convention : quasi complet pour les rémunérations ; pour les
+# avantages, faible chez AstraZeneca, Boehringer Ingelheim et MSD (repas sans convention citée)
+display(spark.sql("""
+    SELECT groupe_laboratoire, type_lien,
+           round(100 * avg(CASE WHEN convention_retrouvee THEN 1 ELSE 0 END), 1) AS pct_convention_retrouvee
+    FROM silver_declarations
+    WHERE type_lien <> 'convention'
+    GROUP BY 1, 2 ORDER BY 1, 2
+"""))
+
+# Montant versé par thème d'événement (M€)
+display(spark.table("silver_declarations")
+        .groupBy("groupe_laboratoire")
+        .pivot("theme_evenement", ["Diabète", "Obésité", "Cardio-rénal", "Autre aire thérapeutique", "Non précisé"])
+        .agg(F.round(F.sum("montant_verse") / 1e6, 2))
+        .orderBy("groupe_laboratoire"))
 
 # COMMAND ----------
 

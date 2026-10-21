@@ -163,7 +163,7 @@ filtre = (f"raison_sociale in ({liste_labos}) "
           f"and date >= date'{ANNEES[0]}-01-01' and date < date'{ANNEES[-1] + 1}-01-01' "
           f"and beneficiaire_profession_code = \"10\"")
 
-colonnes = ("id,raison_sociale,numero_siren,lien_interet,motif_lien_interet,autre_motif,"
+colonnes = ("id,raison_sociale,numero_siren,lien_interet,identifiant_unique,motif_lien_interet,autre_motif,"
             "information_evenement,convention_liee,montant,date,date_debut,date_fin,"
             "beneficiaire_identifiant,beneficiaire_type_code,beneficiaire_profession_code,"
             "code_postal,pays_code,statut")   # pas de nom ni d'adresse (RGPD)

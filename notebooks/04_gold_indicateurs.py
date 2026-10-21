@@ -11,7 +11,7 @@
 # MAGIC | `gold_parts_de_marche` | Qui gagne et qui perd des parts de marché ? | laboratoire × semestre |
 # MAGIC | `gold_parts_de_marche_classe` | Qui domine chaque classe thérapeutique ? | classe × laboratoire × semestre |
 # MAGIC | `gold_investissements` | Combien chaque labo investit auprès des médecins, et qui touche-t-il ? | laboratoire × semestre |
-# MAGIC | `gold_investissements_detail` | Comment (type d'action), auprès de qui (spécialité) et où (région) ? | labo × semestre × catégorie × spécialité × région |
+# MAGIC | `gold_investissements_detail` | Comment (type d'action), sur quel thème, auprès de qui (spécialité) et où (région) ? | labo × semestre × catégorie × thème × spécialité × région |
 # MAGIC | `gold_impact` | L'investissement d'un cycle est-il suivi d'une hausse des ventes ? | laboratoire × semestre |
 # MAGIC
 # MAGIC **Évolutions** : calculées par rapport au **même semestre de l'année précédente**, pour neutraliser
@@ -110,17 +110,23 @@ afficher_nb_lignes("gold_parts_de_marche_classe")
 # MAGIC ## 4. `gold_investissements` (laboratoire × semestre)
 # MAGIC
 # MAGIC - **Investissement total** : avantages + rémunérations versés à des médecins (toutes aires thérapeutiques).
-# MAGIC - **Investissement diabète (estimé)** : la part versée à des endocrinologues-diabétologues ou lors
-# MAGIC   d'événements consacrés au diabète. C'est une **estimation basse** : une partie de l'effort diabète
-# MAGIC   vise aussi les généralistes, sans qu'on puisse l'isoler.
-# MAGIC - **Couverture des endocrinologues** : part des endocrinologues de France touchés au moins une fois
+# MAGIC - **Investissement diabète (estimé)** : montants liés à un événement sur le diabète (quelle que soit la
+# MAGIC   spécialité du médecin), ou versés à des endocrinologues-diabétologues quand l'événement n'est pas précisé
+# MAGIC   (règle détaillée dans le notebook 03). C'est une **estimation basse** : une partie des repas et
+# MAGIC   invitations n'indique pas l'événement.
+# MAGIC - **Investissement obésité** et **cardio-rénal** : présentés à part. Le cardio-rénal éclaire
+# MAGIC   AstraZeneca et Boehringer Ingelheim, dont les gliflozines sont aussi prescrites dans l'insuffisance
+# MAGIC   cardiaque et rénale.
+# MAGIC - **Couverture des endocrinologues** : part des endocrinologues **en activité** touchés au moins une fois
 # MAGIC   dans le semestre (indicateur SFE classique de couverture de cible).
 
 # COMMAND ----------
 
-nb_endocrinologues = spark.sql(
-    "SELECT count(*) AS n FROM silver_medecins WHERE specialite = 'Endocrinologie-diabétologie'").first().n
-print(f"Endocrinologues-diabétologues dans le RPPS : {nb_endocrinologues}")
+nb_endocrinologues = spark.sql("""
+    SELECT count(*) AS n FROM silver_medecins
+    WHERE specialite = 'Endocrinologie-diabétologie' AND en_activite
+""").first().n
+print(f"Endocrinologues-diabétologues en activité dans le RPPS : {nb_endocrinologues}")
 
 spark.sql(f"""
 CREATE OR REPLACE TABLE gold_investissements AS
@@ -128,6 +134,8 @@ SELECT
   semestre, groupe_laboratoire,
   sum(montant_verse)                                                                  AS invest_total_eur,
   sum(CASE WHEN cible_diabete THEN montant_verse ELSE 0 END)                          AS invest_diabete_eur,
+  sum(CASE WHEN theme_evenement = 'Obésité' THEN montant_verse ELSE 0 END)            AS invest_obesite_eur,
+  sum(CASE WHEN theme_evenement = 'Cardio-rénal' THEN montant_verse ELSE 0 END)       AS invest_cardio_renal_eur,
   sum(CASE WHEN specialite = 'Endocrinologie-diabétologie' THEN montant_verse ELSE 0 END) AS invest_endocrinologues_eur,
   sum(CASE WHEN specialite = 'Médecine générale' THEN montant_verse ELSE 0 END)       AS invest_generalistes_eur,
   count(*)                                                                            AS nb_declarations,
@@ -157,7 +165,7 @@ afficher_nb_lignes("gold_investissements")
 spark.sql("""
 CREATE OR REPLACE TABLE gold_investissements_detail AS
 SELECT
-  annee, semestre, groupe_laboratoire, categorie_action, specialite, region, cible_diabete,
+  annee, semestre, groupe_laboratoire, categorie_action, theme_evenement, specialite, region, cible_diabete,
   sum(montant_verse)     AS montant_verse_eur,
   count(*)               AS nb_declarations,
   count(DISTINCT rpps)   AS nb_medecins
@@ -176,6 +184,9 @@ afficher_nb_lignes("gold_investissements_detail")
 # MAGIC - les ventes du semestre *t* et du semestre *t + 1* (effet décalé : une action menée aujourd'hui
 # MAGIC   influence les prescriptions des mois suivants) ;
 # MAGIC - l'**intensité promotionnelle** : euros investis (diabète) pour 1 000 € de ventes.
+# MAGIC
+# MAGIC ⚠️ Ces rapprochements sont **descriptifs** : avec 7 laboratoires × 10 semestres, et des ventes portées
+# MAGIC par d'autres facteurs (nouvelles indications, génériques, pénuries), ils ne prouvent pas un effet causal.
 
 # COMMAND ----------
 
