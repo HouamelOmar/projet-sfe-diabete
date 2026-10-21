@@ -355,8 +355,8 @@ plt.show()
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC **Lecture.** **Lilly** touche plus d'un tiers des endocrinologues en activité chaque semestre (la meilleure
-# MAGIC couverture depuis le 2e semestre 2021) et investit environ 3 € pour 1 000 € de ventes. **Sanofi** a l'intensité la plus
+# MAGIC **Lecture.** **Lilly** a la meilleure couverture des endocrinologues depuis le 2e semestre 2021 (jusqu'à
+# MAGIC 39 % touchés en un semestre, 34,5 % au dernier) et investit environ 3 € pour 1 000 € de ventes. **Sanofi** a l'intensité la plus
 # MAGIC forte (≈ 4 €) : il investit beaucoup pour défendre des ventes d'insulines en recul. À l'opposé, **Novo
 # MAGIC Nordisk** et **AstraZeneca** dépensent environ 0,60 € pour 1 000 € de ventes : leurs produits phares
 # MAGIC progressent sans effort promotionnel proportionné (forte demande pour Ozempic, nouvelles indications de Forxiga).
